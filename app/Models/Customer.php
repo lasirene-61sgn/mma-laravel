@@ -20,6 +20,7 @@ class Customer extends Authenticatable
         'area',
         'name',
         'image',
+        'background_image',
         'father_name',
         'gotra',
         'label_name',
@@ -119,6 +120,14 @@ class Customer extends Authenticatable
     {
         return $this->hasMany(\App\Models\Notification::class);
     }
-    
+    public function viewers()
+    {
+        return $this->belongsToMany(
+            Customer::class,
+            'customer_views',
+            'customer_id',
+            'user_id'
+        );
+    }
 
 }

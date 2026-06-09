@@ -20,10 +20,12 @@ use App\Models\Poll;
 use App\Models\PollResponse;
 use App\Models\EventRSVP;
 use App\Models\Helpline;
+use App\Models\Link;
 use App\Models\SupportCategory;
 use App\Models\QrCode;
 use App\Services\RealTimeNotificationService;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 
 class CustomerController extends Controller
@@ -32,158 +34,126 @@ class CustomerController extends Controller
      * Display the customer profile
      */
     public function profile(Request $request)
-{
-    $authCustomer = Auth::guard('sanctum')->user();
+    {
+        $customer = Auth::guard('sanctum')->user();
 
-    if (!$authCustomer) {
-        return response()->json([
-            'status' => 'error',
-            'message' => 'Unauthenticated.'
-        ], 401);
-    }
-
-    // Load fresh data with village relationship from DB
-    $customer = Customer::with([
-        'village' => function ($query) {
-            $query->select('id', 'name');
-        }
-    ])->find($authCustomer->id);
-
-    if (!$customer) {
-        return response()->json([
-            'status' => 'error',
-            'message' => 'Customer profile not found.'
-        ], 404);
-    }
-
-    // Setup dynamic village name property
-    $customer->village_name = $customer->village ? $customer->village->name : null;
-
-    $responseData = $customer->toArray();
-
-    // FIX: Changed from url() to asset() to match the Storage symlink prefix
-    $responseData['image'] = !empty($customer->image) ? asset($customer->image) : null;
-
-    return response()->json([
-        'status' => 'success',
-        'data' => $responseData
-    ]);
-}
-
-    public function updateProfile(Request $request)
-{
-    // 1. Get authenticated customer safely
-    $authCustomer = Auth::guard('sanctum')->user();
-    
-    if (!$authCustomer) {
-        return response()->json([
-            'status' => 'error',
-            'message' => 'Unauthenticated.'
-        ], 401);
-    }
-
-    // Fresh customer model from DB
-    $customer = Customer::find($authCustomer->id);
-
-    if (!$customer) {
-        return response()->json([
-            'status' => 'error',
-            'message' => 'Customer profile not found.'
-        ], 404);
-    }
-
-    // 2. Base Validation Rules
-    $rules = [
-        'name'             => 'nullable|string|max:100',
-        'father_name'      => 'nullable|string|max:100',
-        'gotra'            => 'nullable|string|max:100',
-        'label_name'       => 'nullable|string|max:100',
-        'district'         => 'nullable|string|max:100',
-        'ms_firm_name'     => 'nullable|string|max:100',
-        'dno'              => 'nullable|string|max:50',
-        'street_road'      => 'nullable|string|max:150',
-        'address2'         => 'nullable|string|max:150',
-        'city'             => 'nullable|string|max:100',
-        'pincode'          => 'nullable|string|max:10',
-        'whatsapp'         => 'nullable|string|max:20',
-        'email'            => 'nullable|email|max:100',
-        'age'              => 'nullable|integer|min:0|max:150',
-        'gender'           => 'nullable|in:male,female,other',
-        'business_type'    => 'nullable|string|max:100',
-        'business_name'    => 'nullable|string|max:100',
-        'product_service'  => 'nullable|string|max:100',
-        'office_address'   => 'nullable|string|max:500',
-        'date_of_birth'    => 'nullable|date',
-        'anniversary_date' => 'nullable|date',
-    ];
-
-    $validatedData = $request->validate($rules);
-
-    // 3. Image Processing using Laravel Storage Disk
-    if ($request->hasFile('image')) {
-        $image = $request->file('image');
-        
-        if ($image->isValid()) {
-            $extension = strtolower($image->getClientOriginalExtension());
-            $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif'];
-
-            if (!in_array($extension, $allowedExtensions)) {
-                return response()->json([
-                    'message' => 'The given data was invalid.',
-                    'errors' => ['image' => ['The image field must be a file of type: jpg, jpeg, png, gif.']]
-                ], 422);
-            }
-
-            if ($image->getSize() > (2048 * 1024)) {
-                return response()->json([
-                    'message' => 'The given data was invalid.',
-                    'errors' => ['image' => ['The image size must not exceed 2MB.']]
-                ], 422);
-            }
-
-            $imageName = time() . '_' . uniqid() . '.' . $extension;
-
-            // Delete old file using the storage disk if it exists
-            if (!empty($customer->image)) {
-                $oldPath = str_replace('storage/', '', $customer->image);
-                if (\Illuminate\Support\Facades\Storage::disk('public')->exists($oldPath)) {
-                    \Illuminate\Support\Facades\Storage::disk('public')->delete($oldPath);
+        // Load customer with village relationship if customer has a village_id
+        if ($customer->village_id) {
+            $customer = Customer::with([
+                'village' => function ($query) {
+                    $query->select('id', 'name');
                 }
-            }
+            ])->find($customer->id);
 
-            // Save the file to: storage/app/public/uploads/customers
-            $storedPath = $image->storeAs('uploads/customers', $imageName, 'public');
-
-            // Save path with 'storage/' prefix to the DB
-            $validatedData['image'] = 'storage/' . $storedPath;
+            // Add village_name attribute to the customer object for frontend use
+            $customer->village_name = $customer->village ? $customer->village->name : null;
         }
-    } else {
-        unset($validatedData['image']);
+
+        // Convert to array to safely modify the response data
+        $responseData = $customer->toArray();
+
+        // FIX 1 & 2: Separate into independent IF statements so BOTH execute
+        if ($customer->image) {
+            $responseData['image'] = (strpos($customer->image, 'uploads/') === 0)
+                ? url($customer->image)
+                : url('storage/' . $customer->image);
+        } else {
+            $responseData['image'] = null;
+        }
+
+        if ($customer->background_image) {
+            $responseData['background_image'] = (strpos($customer->background_image, 'uploads/') === 0)
+                ? url($customer->background_image)
+                : url('storage/' . $customer->background_image); // Fixed comma typo to string concatenation
+        } else {
+            $responseData['background_image'] = null;
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $responseData
+        ]);
     }
 
-    // 4. Update Database
-    $customer->update($validatedData);
+    /**
+     * Update the customer profile
+     */
+    public function updateProfile(Request $request)
+    {
+        $customer = Auth::guard('sanctum')->user();
 
-    // 5. Reload relations and build response
-    $customer = Customer::with([
-        'village' => function ($query) {
-            $query->select('id', 'name');
+        $validatedData = $request->validate([
+            'name' => 'required|string|max:100',
+            'father_name' => 'nullable|string|max:100',
+            'gotra' => 'nullable|string|max:100',
+            'label_name' => 'nullable|string|max:100',
+            'district' => 'nullable|string|max:100',
+            'ms_firm_name' => 'nullable|string|max:100',
+            'dno' => 'nullable|string|max:50',
+            'street_road' => 'nullable|string|max:150',
+            'address2' => 'nullable|string|max:150',
+            'city' => 'nullable|string|max:100',
+            'pincode' => 'nullable|string|max:10',
+            'whatsapp' => 'nullable|string|max:20',
+            'email' => 'nullable|email|max:100',
+            'age' => 'nullable|integer|min:0|max:150',
+            'gender' => 'nullable|in:male,female,other',
+            'business_type' => 'nullable|string|max:100',
+            'business_name' => 'nullable|string|max:100',
+            'product_service' => 'nullable|string|max:100',
+            'office_address' => 'nullable|string|max:500',
+            'date_of_birth' => 'nullable|date',
+            'anniversary_date' => 'nullable|date',
+            'image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+            'background_image' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:4096',
+        ]);
+
+        if ($request->hasFile('image')) {
+            $image = $request->file('image');
+            $imageName = time() . '.' . $image->extension();
+            $image->move(public_path('uploads/customers'), $imageName);
+            $validatedData['image'] = 'uploads/customers/' . $imageName;
         }
-    ])->find($customer->id);
 
-    $customer->village_name = $customer->village ? $customer->village->name : null;
+        if ($request->hasFile('background_image')) {
+            $background_image = $request->file('background_image');
+            $imageName = time() . '.' . $background_image->extension();
+            // FIX 3: Fixed folder path string structure to include missing slashes
+            $background_image->move(public_path('uploads/customer_backgrounds'), $imageName);
+            $validatedData['background_image'] = 'uploads/customer_backgrounds/' . $imageName;
+        }
 
-    $responseData = $customer->toArray();
-    
-    // Generate absolute URL via asset() helper
-    $responseData['image'] = !empty($customer->image) ? asset($customer->image) : null;
+        $customer->update($validatedData);
 
-    return response()->json([
-        'status' => 'success',
-        'message' => 'Profile updated successfully!',
-        'data' => $responseData
-    ]);
-}
+        // Reload customer with village relationship if customer has a village_id
+        if ($customer->village_id) {
+            $customer = Customer::with([
+                'village' => function ($query) {
+                    $query->select('id', 'name');
+                }
+            ])->find($customer->id);
+
+            // Add village_name attribute to the customer object for frontend use
+            $customer->village_name = $customer->village ? $customer->village->name : null;
+        }
+
+        $responseData = $customer->toArray();
+
+        // Standardize URL output for the immediate update response block
+        if (!empty($customer->image)) {
+            $responseData['image'] = (strpos($customer->image, 'uploads/') === 0) ? url($customer->image) : url('storage/' . $customer->image);
+        }
+
+        if (!empty($customer->background_image)) {
+            $responseData['background_image'] = (strpos($customer->background_image, 'uploads/') === 0) ? url($customer->background_image) : url('storage/' . $customer->background_image);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Profile updated successfully!',
+            'data' => $responseData
+        ]);
+    }
 
     /**
      * Display customer notifications
@@ -418,27 +388,26 @@ class CustomerController extends Controller
 
     public function listCustomers(Request $request)
     {
-        $authCustomer = Auth::guard('sanctum')->user();
+        $customer = Auth::guard('sanctum')->user();
 
-        if (!$authCustomer || !$authCustomer->admin_id) {
-
+        // 1. Validate the logged-in customer/user
+        if (!$customer || !$customer->admin_id) {
             return response()->json([
                 'status' => 'error',
                 'message' => 'Invalid customer data.'
             ], 400);
         }
 
+        // 2. Get search parameter
         $search = $request->query('search');
 
+        // 3. Base Query to Eager Load relations
         $query = Customer::with(['village', 'familyMembers'])
-            ->where('admin_id', $authCustomer->admin_id)
-            ->where('id', '!=', $authCustomer->id);
+            ->where('admin_id', $customer->admin_id);
 
-        // Search filter
+        // 4. Apply search filter
         if ($search) {
-
             $query->where(function ($q) use ($search) {
-
                 $q->where('name', 'LIKE', '%' . $search . '%')
                     ->orWhere('mobile', 'LIKE', '%' . $search . '%')
                     ->orWhere('whatsapp', 'LIKE', '%' . $search . '%')
@@ -450,53 +419,74 @@ class CustomerController extends Controller
             });
         }
 
-        $customers = $query->orderBy('created_at', 'desc')->get();
+        $customers = $query->get();
 
-        // Add APP_URL
-        $customers = $customers->map(function ($customer) {
+        // 5. Get IDs of all customers under this admin that this user HAS NOT seen yet
+        $unseenCustomerIds = Customer::where('admin_id', $customer->admin_id)
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })
+            ->pluck('id')
+            ->toArray();
 
-            $customerArray = $customer->toArray();
+        // The count of new items before we clear them
+        $newCustomersCount = count($unseenCustomerIds);
 
-            // Customer image full URL
-            $customerArray['image'] = !empty($customer->image)
-                ? asset($customer->image)
-                : null;
-
-            // Optional extra field
-            $customerArray['image_url'] = !empty($customer->image)
-                ? asset($customer->image)
-                : null;
-
-            // Family member images
-            if (!empty($customerArray['family_members'])) {
-
-                $customerArray['family_members'] = collect($customerArray['family_members'])->map(function ($family) {
-
-                    $family['image'] = !empty($family['image'])
-                        ? asset($family['image'])
-                        : null;
-
-                    $family['image_url'] = !empty($family['image'])
-                        ? asset($family['image'])
-                        : null;
-
-                    return $family;
-                })->toArray();
+        // 6. FORCE INSERT INTO PIVOT TABLE DIRECTLY
+        if ($newCustomersCount > 0) {
+            $insertData = [];
+            foreach ($unseenCustomerIds as $id) {
+                $insertData[] = [
+                    'user_id' => $customer->id,
+                    'customer_id' => $id,
+                    'created_at' => \Carbon\Carbon::now(),
+                    'updated_at' => \Carbon\Carbon::now(),
+                ];
             }
 
-            return $customerArray;
-        });
+            // insertOrIgnore prevents errors if a duplicate entry tries to insert
+            DB::table('customer_views')->insertOrIgnore($insertData);
+        }
 
+        // Convert to array to transform fields safely
+        $formattedCustomers = $customers->toArray();
+
+        foreach ($formattedCustomers as &$item) {
+            // Format Dates
+            if (!empty($item['date_of_birth'])) {
+                $item['date_of_birth'] = \Carbon\Carbon::parse($item['date_of_birth'])->toIso8601String();
+            }
+            if (!empty($item['anniversary_date'])) {
+                $item['anniversary_date'] = \Carbon\Carbon::parse($item['anniversary_date'])->toIso8601String();
+            }
+
+            // GUARANTEE FULL IMAGE URLS
+            if (!empty($item['image'])) {
+                $item['image'] = (strpos($item['image'], 'http') === 0) ? $item['image'] : (
+                    (strpos($item['image'], 'uploads/') === 0) ? url($item['image']) : url('storage/' . $item['image'])
+                );
+            } else {
+                $item['image'] = null;
+            }
+
+            if (!empty($item['background_image'])) {
+                $item['background_image'] = (strpos($item['background_image'], 'http') === 0) ? $item['background_image'] : (
+                    (strpos($item['background_image'], 'uploads/') === 0) ? url($item['background_image']) : url('storage/' . $item['background_image'])
+                );
+            } else {
+                $item['background_image'] = null;
+            }
+        }
+
+        // 7. Return response
         return response()->json([
             'status' => 'success',
-            'count' => $customers->count(),
-            'data' => $customers
+            'total_count' => count($formattedCustomers),
+            'new_items_count' => $newCustomersCount,
+            'data' => $formattedCustomers
         ]);
     }
 
-    /**
-     * Display details of a specific customer from the same admin
-     */
     public function showCustomer(Request $request, $id)
     {
         $customer = Auth::guard('sanctum')->user();
@@ -523,9 +513,102 @@ class CustomerController extends Controller
             ], 404);
         }
 
+        // Convert to array to explicitly sanitize/guarantee asset prefix paths
+        $targetArray = $targetCustomer->toArray();
+
+        // GUARANTEE FULL IMAGE URLS FOR SHOW INDIVIDUAL VIEW
+        if (!empty($targetArray['image'])) {
+            $targetArray['image'] = (strpos($targetArray['image'], 'http') === 0) ? $targetArray['image'] : (
+                (strpos($targetArray['image'], 'uploads/') === 0) ? url($targetArray['image']) : url('storage/' . $targetArray['image'])
+            );
+        } else {
+            $targetArray['image'] = null;
+        }
+
+        if (!empty($targetArray['background_image'])) {
+            $targetArray['background_image'] = (strpos($targetArray['background_image'], 'http') === 0) ? $targetArray['background_image'] : (
+                (strpos($targetArray['background_image'], 'uploads/') === 0) ? url($targetArray['background_image']) : url('storage/' . $targetArray['background_image'])
+            );
+        } else {
+            $targetArray['background_image'] = null;
+        }
+
         return response()->json([
             'status' => 'success',
-            'data' => $targetCustomer
+            'data' => $targetArray
+        ]);
+    }
+
+    public function getSocialLinks(Request $request)
+    {
+        $customer = Auth::guard('sanctum')->user();
+
+        // 1. Validate the logged-in customer session
+        if (!$customer || !$customer->admin_id) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Invalid customer data.'
+            ], 400);
+        }
+
+        // 2. Fetch the links matching the customer's admin_id
+        $links = Link::where('admin_id', $customer->admin_id)->first();
+
+        // 3. If no links are configured yet, return fallback empty values
+        if (!$links) {
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'whatsapp_link'  => null,
+                    'facebook_link'  => null,
+                    'email_link'     => null,
+                    'twitter_link'   => null,
+                    'instagram_link' => null,
+                    'linkedin_link'  => null,
+                    'youtube_link'   => null,
+                ]
+            ]);
+        }
+
+        // 4. Return the configured links matching your API standard structure
+        return response()->json([
+            'status' => 'success',
+            'data' => [
+                // 'id'             => $links->id,
+                // 'admin_id'       => $links->admin_id,
+                'whatsapp_link'  => $links->whatsapp_link,
+                'facebook_link'  => $links->facebook_link,
+                'email_link'     => $links->email_link,
+                'twitter_link'   => $links->twitter_link,
+                'instagram_link' => $links->instagram_link,
+                'linkedin_link'  => $links->linkedin_link,
+                'youtube_link'   => $links->youtube_link,
+            ]
+        ]);
+    }
+
+    // Customer Mark As Read 
+    public function markAsSeen($id)
+    {
+        $user = Auth::guard('sanctum')->user();
+
+        if (!$user) {
+            return response()->json(['status' => 'error', 'message' => 'Unauthenticated.'], 401);
+        }
+
+        $customerProfile = Customer::find($id);
+
+        if (!$customerProfile) {
+            return response()->json(['status' => 'error', 'message' => 'Customer not found.'], 404);
+        }
+
+        // Attach the user ID to the customer's viewers list if it isn't already there
+        // syncWithoutDetaching prevents duplicate database row errors
+        $customerProfile->viewers()->syncWithoutDetaching([$user->id]);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Customer marked as viewed.'
         ]);
     }
 
@@ -585,22 +668,16 @@ class CustomerController extends Controller
     {
         $customer = Auth::guard('sanctum')->user();
 
-        // Get banner items from same admin
+        // Get banner items from the same admin
         $banners = Banner::where('admin_id', $customer->admin_id)
             ->where('status', 'active')
             ->orderBy('created_at', 'desc')
             ->get();
 
-        // Add full image URL
+        // Add full image URLs to each banner
         $bannersWithUrls = $banners->map(function ($banner) {
-
             $bannerArray = $banner->toArray();
-
-            // Convert image_path into full APP_URL
-            $bannerArray['image_path'] = $banner->image_path
-                ? asset('storage/' . $banner->image_path)
-                : null;
-
+            $bannerArray['image_path_url'] = $banner->image_path_url;
             return $bannerArray;
         });
 
@@ -729,39 +806,50 @@ class CustomerController extends Controller
         ]);
     }
 
-    /**
-     * Display news items from the customer's admin
-     */
     public function news(Request $request)
     {
         $customer = Auth::guard('sanctum')->user();
 
-        // Get news items from same admin
+        // 1. Get active news
         $newsItems = News::where('admin_id', $customer->admin_id)
             ->where('status', 'active')
             ->orderBy('posted_date', 'desc')
             ->get();
 
-        // Add full APP_URL for image
+        // 2. Identify newly added items unseen by this user
+        $unseenIds = News::where('admin_id', $customer->admin_id)
+            ->where('status', 'active')
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })
+            ->pluck('id')
+            ->toArray();
+
+        $newItemsCount = count($unseenIds);
+
+        // 3. Force insert to pivot table immediately
+        if ($newItemsCount > 0) {
+            $insertData = [];
+            foreach ($unseenIds as $id) {
+                $insertData[] = [
+                    'user_id' => $customer->id,
+                    'news_id' => $id,
+                    'created_at' => Carbon::now(),
+                    'updated_at' => Carbon::now(),
+                ];
+            }
+            DB::table('news_views')->insertOrIgnore($insertData);
+        }
+
         $newsItemsWithUrls = $newsItems->map(function ($news) {
-
             $newsArray = $news->toArray();
-
-            // Full APP_URL for image_path
-            $newsArray['image_path'] = !empty($news->image_path)
-                ? asset('storage/' . $news->image_path)
-                : null;
-
-            // Optional extra field
-            $newsArray['image_path_url'] = !empty($news->image_path)
-                ? asset('storage/' . $news->image_path)
-                : null;
-
+            $newsArray['image_path_url'] = $news->image_path_url;
             return $newsArray;
         });
 
         return response()->json([
             'status' => 'success',
+            'new_items_count' => $newItemsCount,
             'data' => $newsItemsWithUrls
         ]);
     }
@@ -1385,9 +1473,6 @@ class CustomerController extends Controller
         ]);
     }
 
-    /**
-     * Get today's birthdays from admin-added customers
-     */
     public function todayBirthdays(Request $request)
     {
         $customer = Auth::guard('sanctum')->user();
@@ -1400,18 +1485,96 @@ class CustomerController extends Controller
             ], 400);
         }
 
-        // Get customers with today's birthday from the same admin
-        $todayBirthdays = Customer::where('admin_id', $customer->admin_id)
+        // 1. Get all customers with birthdays (Eager loading full village relation like showCustomer)
+        $allBirthdays = Customer::where('admin_id', $customer->admin_id)
             ->whereNotNull('date_of_birth')
-            ->whereRaw('MONTH(date_of_birth) = ?', [Carbon::now()->month])
-            ->whereRaw('DAY(date_of_birth) = ?', [Carbon::now()->day])
-            ->select('id', 'name', 'mobile', 'whatsapp', 'date_of_birth', 'village_id', 'area')
-            ->with('village:id,name')
+            ->with('village') // Changed from 'village:id,name' to load full schema data
             ->get();
+
+        $today = \Carbon\Carbon::now();
+        $todayMonth = $today->month;
+        $todayDay = $today->day;
+        $todayCount = 0;
+
+        $monthNames = [
+            1 => 'January',
+            2 => 'February',
+            3 => 'March',
+            4 => 'April',
+            5 => 'May',
+            6 => 'June',
+            7 => 'July',
+            8 => 'August',
+            9 => 'September',
+            10 => 'October',
+            11 => 'November',
+            12 => 'December'
+        ];
+
+        // Initialize all 12 months with empty standard structural objects
+        $finalData = [];
+        foreach ($monthNames as $num => $name) {
+            $finalData[$name] = new \stdClass();
+        }
+
+        // 2. Format dates, append contextual keys, filter, and sort
+        $processedBirthdays = $allBirthdays->map(function ($item) use ($todayMonth, $todayDay, &$todayCount, $monthNames, $today) {
+            $dob = \Carbon\Carbon::parse($item->date_of_birth);
+
+            // Check if the birthday is exactly TODAY
+            if ($dob->month === $todayMonth && $dob->day === $todayDay) {
+                $todayCount++;
+                $item->is_birthday_today = true;
+            } else {
+                $item->is_birthday_today = false;
+            }
+
+            // Structural extensions to match the application dashboard rules
+            $item->birth_month_name = $monthNames[$dob->month];
+            $item->birth_month_num = $dob->month;
+            $item->birth_day = $dob->day;
+
+            // Dynamic display timeline index grouping string
+            $item->birthday_group_date = sprintf('%02d-%02d-%d', $dob->day, $dob->month, $today->year);
+
+            // Convert birth dates to structured ISO format
+            $item->date_of_birth = $dob->toIso8601String();
+
+            // Ensure standard object structural fields exist safely in the response payload
+            if (!isset($item->anniversary_date)) {
+                $item->anniversary_date = null;
+            }
+
+            return $item;
+        })
+            // Filter out past birthdays for the current month
+            ->filter(function ($item) use ($todayMonth, $todayDay) {
+                if ($item->birth_month_num === $todayMonth) {
+                    return $item->birth_day >= $todayDay;
+                }
+                return true;
+            })
+            // Sort chronologically by calendar day
+            ->sortBy('birth_day');
+
+        // 3. Group data collections chronologically
+        $groupedByMonthNum = $processedBirthdays->groupBy('birth_month_num');
+
+        foreach ($groupedByMonthNum as $monthNum => $monthGroup) {
+            $monthName = $monthNames[$monthNum];
+
+            // Group customers into key-value pairs matching their upcoming milestone date
+            $dateGroupings = $monthGroup->groupBy('birthday_group_date')->map(function ($customersOnDate) {
+                return $customersOnDate->values()->all();
+            });
+
+            $finalData[$monthName] = $dateGroupings;
+        }
 
         return response()->json([
             'status' => 'success',
-            'data' => $todayBirthdays
+            'today_count' => $todayCount,
+            'data' => $finalData
         ]);
     }
 
@@ -1430,20 +1593,145 @@ class CustomerController extends Controller
             ], 400);
         }
 
-        // Get customers with today's anniversary from the same admin
-        $todayAnniversaries = Customer::where('admin_id', $customer->admin_id)
+        // 1. Get all customers with anniversaries (Eager loading full village relation like showCustomer)
+        $allAnniversaries = Customer::where('admin_id', $customer->admin_id)
             ->whereNotNull('anniversary_date')
-            ->whereRaw('MONTH(anniversary_date) = ?', [Carbon::now()->month])
-            ->whereRaw('DAY(anniversary_date) = ?', [Carbon::now()->day])
-            ->select('id', 'name', 'mobile', 'whatsapp', 'anniversary_date', 'village_id', 'area')
-            ->with('village:id,name')
+            ->with('village') // Loads full schema structural properties
             ->get();
+
+        $today = \Carbon\Carbon::now();
+        $todayMonth = $today->month;
+        $todayDay = $today->day;
+        $todayCount = 0;
+
+        // Array to map month numbers to their full text names
+        $monthNames = [
+            1 => 'January',
+            2 => 'February',
+            3 => 'March',
+            4 => 'April',
+            5 => 'May',
+            6 => 'June',
+            7 => 'July',
+            8 => 'August',
+            9 => 'September',
+            10 => 'October',
+            11 => 'November',
+            12 => 'December'
+        ];
+
+        // Initialize all 12 months with empty standard structural objects
+        $finalData = [];
+        foreach ($monthNames as $num => $name) {
+            $finalData[$name] = new \stdClass(); // Uses standard object class so empty months output as {} instead of []
+        }
+
+        // 2. Format dates, append contextual keys, filter, and sort
+        $processedAnniversaries = $allAnniversaries->map(function ($item) use ($todayMonth, $todayDay, &$todayCount, $monthNames, $today) {
+            $anniversaryDate = \Carbon\Carbon::parse($item->anniversary_date);
+
+            // Check if the anniversary is exactly TODAY
+            if ($anniversaryDate->month === $todayMonth && $anniversaryDate->day === $todayDay) {
+                $todayCount++;
+                $item->is_anniversary_today = true;
+            } else {
+                $item->is_anniversary_today = false;
+            }
+
+            // Structural extensions to match the application dashboard rules
+            $item->anniversary_month_name = $monthNames[$anniversaryDate->month];
+            $item->anniversary_month_num = $anniversaryDate->month;
+            $item->anniversary_day = $anniversaryDate->day;
+
+            // Dynamic display timeline index grouping string
+            $item->anniversary_group_date = sprintf('%02d-%02d-%d', $anniversaryDate->day, $anniversaryDate->month, $today->year);
+
+            // Convert anniversary dates to structured ISO format
+            $item->anniversary_date = $anniversaryDate->toIso8601String();
+
+            // Ensure standard object structural fields exist safely in the response payload
+            if (!isset($item->date_of_birth)) {
+                $item->date_of_birth = null;
+            }
+
+            return $item;
+        })
+            // Filter out past anniversaries for the current month
+            ->filter(function ($item) use ($todayMonth, $todayDay) {
+                if ($item->anniversary_month_num === $todayMonth) {
+                    return $item->anniversary_day >= $todayDay;
+                }
+                return true;
+            })
+            // Sort chronologically by calendar day
+            ->sortBy('anniversary_day');
+
+        // 3. Group data collections chronologically
+        $groupedByMonthNum = $processedAnniversaries->groupBy('anniversary_month_num');
+
+        foreach ($groupedByMonthNum as $monthNum => $monthGroup) {
+            $monthName = $monthNames[$monthNum];
+
+            // Group customers into key-value pairs matching their upcoming milestone date
+            $dateGroupings = $monthGroup->groupBy('anniversary_group_date')->map(function ($customersOnDate) {
+                return $customersOnDate->values()->all();
+            });
+
+            $finalData[$monthName] = $dateGroupings;
+        }
 
         return response()->json([
             'status' => 'success',
-            'data' => $todayAnniversaries
+            'today_count' => $todayCount, // Total count for dashboard badges
+            'data' => $finalData
         ]);
     }
+
+    public function dashboardCounters(Request $request)
+    {
+        $customer = Auth::guard('sanctum')->user();
+
+        if (!$customer || !$customer->admin_id) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid session.'], 400);
+        }
+
+        $galleryCount = GalleryItem::where('admin_id', $customer->admin_id)->where('status', 'active')
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })->count();
+
+        $eventCount = Event::where('admin_id', $customer->admin_id)->where('status', 'active')
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })->count();
+
+        $newsCount = News::where('admin_id', $customer->admin_id)->where('status', 'active')
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })->count();
+
+        $committeeCount = CommitteePerson::where('admin_id', $customer->admin_id)->where('status', 'active')
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })->count();
+
+        $customerCount = Customer::where('admin_id', $customer->admin_id)
+            ->whereDoesntHave('viewers', function ($q) use ($customer) {
+                $q->where('user_id', $customer->id);
+            })->count();
+
+        return response()->json([
+            'status' => 'success',
+            'counters' => [
+                'new_gallery_count' => $galleryCount,
+                'new_event_count' => $eventCount,
+                'new_news_count' => $newsCount,
+                'new_committee_count' => $committeeCount,
+                'new_customer_count' => $customerCount,
+            ]
+        ]);
+    }
+    
 
     /**
      * Get all unique business names from customers

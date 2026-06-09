@@ -27,6 +27,7 @@ use App\Http\Controllers\Customer\CustomerPollController;
 use App\Http\Controllers\Customer\FamilyMemberController;
 use App\Http\Controllers\Admin\BillController;
 use App\Http\Controllers\Admin\HelplineController;
+use App\Http\Controllers\Admin\LinkController;
 
 /*
 |--------------------------------------------------------------------------
@@ -215,7 +216,18 @@ Route::prefix('admin')->middleware(['committee.member.auth'])->group(function ()
     Route::resource('committee',CommitteePersonController::class)->names('admin.committee')->parameters(['committee' => 'committeePerson']);
     // Customer Management Routes
     Route::resource('customers', CustomerController::class)->names('admin.customers');
-    
+    Route::get('/customer/scan-create', [CustomerController::class, 'scanCreateForm'])->name('admin.customer.scan-create-form');
+
+    // Explicitly add 'admin.' to the name chain so it matches your Blade files!
+Route::prefix('customer/{customer}/family')->name('admin.customer.family.')->group(function () {
+    Route::get('/', [CustomerController::class, 'indexFamilyMember'])->name('index');          // admin.customer.family.index
+    Route::get('/create', [CustomerController::class, 'createFamilyMember'])->name('create');  // admin.customer.family.create
+    Route::post('/', [CustomerController::class, 'storeFamilyMember'])->name('store');         // admin.customer.family.store
+    Route::get('/{familyMemberId}/edit', [CustomerController::class, 'editFamilyMember'])->name('edit'); // admin.customer.family.edit
+    Route::put('/{familyMemberId}', [CustomerController::class, 'updateFamilyMember'])->name('update');   // admin.customer.family.update
+    Route::delete('/{familyMemberId}', [CustomerController::class, 'deleteFamilyMember'])->name('destroy'); // admin.customer.family.destroy
+});
+
     // Customer Plan Management Routes
     Route::resource('customer',CustomerController::class)->names('admin.customer');
     Route::resource('customer-plan', CustomerPlanController::class)->except(['show'])->names('admin.customer-plan')->parameters(['customer-plan' => 'customerPlan']);
@@ -230,6 +242,7 @@ Route::prefix('admin')->middleware(['committee.member.auth'])->group(function ()
 
     // Helpline Section
     Route::resource('helpline', HelplineController::class)->names('admin.helpline');
+    Route::resource('links', LinkController::class)->names('admin.links');
     
     // Polls Routes
     Route::resource('polls', PollController::class)->names('admin.polls');

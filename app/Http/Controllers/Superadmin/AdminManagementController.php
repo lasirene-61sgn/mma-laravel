@@ -27,7 +27,10 @@ class AdminManagementController extends Controller
         'customer_plan' => 'Customers Plans',
         'bills' => 'Bills',
         'about_us' => 'About Us',
-        'polls' => 'Polls'
+        'polls' => 'Polls',
+        'links' => 'Links',
+        'qrcode' => 'Qrcode',
+        'helpline' => 'Helpline',
     ];
     
     // Define available customer fields

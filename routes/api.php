@@ -125,6 +125,11 @@ Route::prefix('customer')->group(function () {
         Route::get('/support', [CustomerApiController::class, 'support']);
         Route::get('/support/categories', [CustomerApiController::class, 'supportCategories']);
 
+        
+        //Dashboard Counts
+        Route::get('/dashboard-counters', [CustomerApiController::class, 'dashboardCounters']);
+        
+        Route::get('/social-links', [CustomerApiController::class, 'getSocialLinks']);
         // QR Code
         Route::get('/qr-code', [CustomerApiController::class, 'qrCode']);
 
